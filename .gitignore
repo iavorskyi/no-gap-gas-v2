@@ -1,0 +1,32 @@
+# Environment variables (contains secrets)
+.env
+
+# Binary output
+my-go-service
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binaries
+*.test
+
+# Output of go build
+*.out
+
+# Go workspace file
+go.work
+
+# Screenshots from debugging
+*.png
+
+# IDE specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS specific files
+.DS_Store
+Thumbs.db
