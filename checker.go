@@ -12,17 +12,15 @@ import (
 
 // CheckAndUpdateIfNeeded navigates to the target page, checks values, and updates if needed
 //
-// IMPORTANT: This function is permanently in DRY-RUN mode (see line 109: const DRY_RUN = true)
-// It will:
-//   - Login to the site
-//   - Read current value from #last_value field
-//   - Calculate new value (current + monthly increment)
-//   - Find the input field and "Ввести" button
-//   - Log exactly what it would do
-//   - Save a screenshot
-//   - BUT NOT actually submit the form
+// DRY-RUN mode is controlled by GASOLINA_DRY_RUN env var (default: true/enabled)
+// Set GASOLINA_DRY_RUN=false to enable real submissions.
 //
-// To enable real submissions, change DRY_RUN to false in the function body.
+// It will:
+//   - Read current value from #last_value field
+//   - Calculate new value (current + previous month's increment)
+//   - Find the input field and "Ввести" button
+//   - In dry-run mode: log what it would do and save a screenshot
+//   - In live mode: actually submit the form
 func CheckAndUpdateIfNeeded(ctx context.Context, config *Config) error {
 	now := time.Now()
 	currentDay := now.Day()
@@ -36,13 +34,13 @@ func CheckAndUpdateIfNeeded(ctx context.Context, config *Config) error {
 
 	log.Printf("Day %d is within submission window (1-5) - proceeding", currentDay)
 
-	// Get the increment for current month
-	increment, err := config.GetIncrementForMonth(currentMonth)
+	// Get the increment for previous month (we submit consumption from last month)
+	increment, prevMonth, err := config.GetIncrementForPreviousMonth(currentMonth)
 	if err != nil {
-		return fmt.Errorf("failed to get increment for month %d: %w", currentMonth, err)
+		return fmt.Errorf("failed to get increment for previous month %d: %w", prevMonth, err)
 	}
 
-	log.Printf("Increment for month %d: %d", currentMonth, increment)
+	log.Printf("Using increment from previous month %d: %d", prevMonth, increment)
 
 	// First, navigate to main page to read current value from #last_value field
 	log.Println("Navigating to main page to read current value from #last_value...")
@@ -197,12 +195,12 @@ func CheckAndUpdateIfNeeded(ctx context.Context, config *Config) error {
 		}
 	}
 
-	// PERMANENT DRY-RUN MODE - Log what would be done but don't actually do it
-	const DRY_RUN = true // Hardcoded permanent dry-run mode
+	// DRY-RUN MODE - controlled by GASOLINA_DRY_RUN env var (default: true)
+	// Set GASOLINA_DRY_RUN=false to enable real submissions
 
-	if DRY_RUN {
+	if config.DryRun {
 		log.Println("===========================================")
-		log.Println("DRY-RUN MODE (PERMANENT)")
+		log.Println("DRY-RUN MODE (set GASOLINA_DRY_RUN=false to submit)")
 		log.Println("===========================================")
 		log.Printf("Would perform the following actions:")
 		if inputFound {

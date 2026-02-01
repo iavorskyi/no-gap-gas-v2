@@ -15,6 +15,7 @@ type Config struct {
 	AccountNumber     string
 	CheckURL          string
 	CronSchedule      string
+	DryRun            bool
 	MonthlyIncrements map[int]int // month number -> increment value
 }
 
@@ -29,6 +30,7 @@ func LoadConfig() (*Config, error) {
 		AccountNumber: os.Getenv("GASOLINA_ACCOUNT_NUMBER"),
 		CheckURL:      os.Getenv("GASOLINA_CHECK_URL"),
 		CronSchedule:  os.Getenv("CRON_SCHEDULE"),
+		DryRun:        os.Getenv("GASOLINA_DRY_RUN") != "false",
 	}
 
 	// Set default cron schedule if not provided
@@ -73,4 +75,15 @@ func (c *Config) GetIncrementForMonth(month int) (int, error) {
 		return 0, fmt.Errorf("no increment configured for month %d", month)
 	}
 	return increment, nil
+}
+
+// GetIncrementForPreviousMonth returns the increment value for the previous month
+// If current month is January (1), returns December (12) increment
+func (c *Config) GetIncrementForPreviousMonth(currentMonth int) (int, int, error) {
+	prevMonth := currentMonth - 1
+	if prevMonth < 1 {
+		prevMonth = 12
+	}
+	increment, err := c.GetIncrementForMonth(prevMonth)
+	return increment, prevMonth, err
 }

@@ -35,6 +35,7 @@ func main() {
 	log.Printf("Cron schedule: %s", config.CronSchedule)
 	log.Printf("Account number: %s", config.AccountNumber)
 	log.Printf("Target URL: %s", config.CheckURL)
+	log.Printf("Dry-run mode: %v", config.DryRun)
 
 	// Test mode handlers
 	if *testLogin {
