@@ -12,6 +12,7 @@ import (
 type Config struct {
 	Email             string
 	Password          string
+	AccountNumber     string
 	CheckURL          string
 	CronSchedule      string
 	MonthlyIncrements map[int]int // month number -> increment value
@@ -23,10 +24,11 @@ func LoadConfig() (*Config, error) {
 	_ = godotenv.Load()
 
 	config := &Config{
-		Email:        os.Getenv("GASOLINA_EMAIL"),
-		Password:     os.Getenv("GASOLINA_PASSWORD"),
-		CheckURL:     os.Getenv("GASOLINA_CHECK_URL"),
-		CronSchedule: os.Getenv("CRON_SCHEDULE"),
+		Email:         os.Getenv("GASOLINA_EMAIL"),
+		Password:      os.Getenv("GASOLINA_PASSWORD"),
+		AccountNumber: os.Getenv("GASOLINA_ACCOUNT_NUMBER"),
+		CheckURL:      os.Getenv("GASOLINA_CHECK_URL"),
+		CronSchedule:  os.Getenv("CRON_SCHEDULE"),
 	}
 
 	// Set default cron schedule if not provided
@@ -50,6 +52,9 @@ func LoadConfig() (*Config, error) {
 	}
 	if config.Password == "" {
 		return nil, fmt.Errorf("GASOLINA_PASSWORD is required")
+	}
+	if config.AccountNumber == "" {
+		return nil, fmt.Errorf("GASOLINA_ACCOUNT_NUMBER is required")
 	}
 	if config.CheckURL == "" {
 		return nil, fmt.Errorf("GASOLINA_CHECK_URL is required")

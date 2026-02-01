@@ -11,7 +11,7 @@ import (
 )
 
 // Login performs authentication on gasolina-online.com
-func Login(ctx context.Context, email, password string) error {
+func Login(ctx context.Context, email, password, accountNumber string) error {
 	log.Printf("Attempting to login as %s, psw: %s...", email, password)
 
 	var loginURL = "https://gasolina-online.com/"
@@ -134,6 +134,56 @@ func Login(ctx context.Context, email, password string) error {
 	// Save screenshot after login attempt
 	_ = SaveScreenshot(ctx, "debug_after_login.png")
 	log.Println("Screenshot saved: debug_after_login.png")
+
+	// Select account from dropdown
+	if accountNumber != "" {
+		log.Printf("Selecting account containing: %s", accountNumber)
+
+		// First, click the hamburger menu to open navigation using JavaScript
+		err = chromedp.Run(ctx,
+			chromedp.Evaluate(`document.querySelector('.navbar-toggler').click()`, nil),
+			chromedp.Sleep(1*time.Second),
+		)
+		if err != nil {
+			log.Printf("Hamburger menu click failed: %v", err)
+		}
+
+		_ = SaveScreenshot(ctx, "debug_menu_open.png")
+		log.Println("Screenshot saved: debug_menu_open.png")
+
+		// Click the account dropdown toggle button using JavaScript
+		err = chromedp.Run(ctx,
+			chromedp.Evaluate(`document.querySelector('#dropdown01').click()`, nil),
+			chromedp.Sleep(1*time.Second),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to click account dropdown: %w", err)
+		}
+
+		_ = SaveScreenshot(ctx, "debug_dropdown_open.png")
+		log.Println("Screenshot saved: debug_dropdown_open.png")
+
+		// Find and click the dropdown item containing the account number using JavaScript
+		jsClick := fmt.Sprintf(`
+			const links = document.querySelectorAll('.dropdown-menu a.dropdown-item');
+			for (const link of links) {
+				if (link.textContent.includes('%s')) {
+					link.click();
+					break;
+				}
+			}
+		`, accountNumber)
+		err = chromedp.Run(ctx,
+			chromedp.Evaluate(jsClick, nil),
+			chromedp.Sleep(2*time.Second),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to select account %s: %w", accountNumber, err)
+		}
+
+		_ = SaveScreenshot(ctx, "debug_account_selected.png")
+		log.Printf("Account %s selected successfully", accountNumber)
+	}
 
 	log.Println("Login sequence completed")
 	return nil

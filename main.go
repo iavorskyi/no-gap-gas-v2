@@ -33,6 +33,7 @@ func main() {
 
 	log.Printf("Configuration loaded successfully")
 	log.Printf("Cron schedule: %s", config.CronSchedule)
+	log.Printf("Account number: %s", config.AccountNumber)
 	log.Printf("Target URL: %s", config.CheckURL)
 
 	// Test mode handlers
@@ -93,7 +94,7 @@ func runJob(config *Config) {
 
 	// Login
 	if err := retryWithBackoff(jobCtx, 3, func() error {
-		return Login(jobCtx, config.Email, config.Password)
+		return Login(jobCtx, config.Email, config.Password, config.AccountNumber)
 	}); err != nil {
 		log.Printf("ERROR: Login failed after retries: %v", err)
 		_ = SaveScreenshot(jobCtx, "error_login.png")
@@ -117,7 +118,7 @@ func runTestLogin(config *Config) {
 	ctx, cancel := createBrowserContext()
 	defer cancel()
 
-	if err := Login(ctx, config.Email, config.Password); err != nil {
+	if err := Login(ctx, config.Email, config.Password, config.AccountNumber); err != nil {
 		log.Printf("Login test FAILED: %v", err)
 		_ = SaveScreenshot(ctx, "test_login_error.png")
 		os.Exit(1)
@@ -134,7 +135,7 @@ func runTestCheck(config *Config) {
 	defer cancel()
 
 	// Try to login first
-	if err := Login(ctx, config.Email, config.Password); err != nil {
+	if err := Login(ctx, config.Email, config.Password, config.AccountNumber); err != nil {
 		log.Printf("Warning: Login failed: %v", err)
 	}
 
