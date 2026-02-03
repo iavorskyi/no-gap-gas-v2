@@ -103,97 +103,96 @@ func CheckAndUpdateIfNeeded(ctx context.Context, config *Config) error {
 		getUkrainianMonthName(now.Month()), now.Year())
 	log.Printf("Proceeding to submit new value: %d", newValue)
 
-	// Find the input field for entering the new value
-	// Common patterns: input[name="value"], input[type="text"], input[type="number"]
-	var inputFound bool
-	var inputSelector string
-
-	possibleSelectors := []string{
-		`input[name="value"]`,
-		`input[name="indicator_value"]`,
-		`input[name="new_value"]`,
-		`input[type="number"]`,
-		`input[type="text"]:not([disabled])`,
-	}
-
-	// Try to find the input field
-	for _, selector := range possibleSelectors {
-		err = chromedp.Run(ctx,
-			chromedp.Evaluate(fmt.Sprintf(`document.querySelector('%s') !== null`, selector), &inputFound),
-		)
-		if err == nil && inputFound {
-			inputSelector = selector
-			log.Printf("Found input field with selector: %s", selector)
-			break
-		}
-	}
-
-	if !inputFound || inputSelector == "" {
-		log.Println("WARNING: Could not find input field for new value")
-		log.Println("Will attempt to find 'Ввести' button anyway")
-	}
-
-	// Find the "Ввести" button
-	var buttonFound bool
-	var buttonSelector string
-
-	possibleButtonSelectors := []string{
-		`button:contains("Ввести")`,
-		`input[type="submit"][value*="Ввести"]`,
-		`button[type="submit"]:contains("Ввести")`,
-		`a:contains("Ввести")`,
-	}
-
-	for _, selector := range possibleButtonSelectors {
-		err = chromedp.Run(ctx,
-			chromedp.Evaluate(fmt.Sprintf(`
-				(function() {
-					const elements = document.querySelectorAll('button, input[type="submit"], a');
-					for (let el of elements) {
-						if (el.textContent.includes('Ввести') || (el.value && el.value.includes('Ввести'))) {
-							return true;
-						}
-					}
-					return false;
-				})()
-			`), &buttonFound),
-		)
-		if err == nil && buttonFound {
-			buttonSelector = selector
-			log.Printf("Found 'Ввести' button with selector: %s", selector)
-			break
-		}
-	}
-
-	if !buttonFound {
-		log.Println("WARNING: Could not find 'Ввести' button")
-		_ = SaveScreenshot(ctx, fmt.Sprintf("no_button_found_%d.png", time.Now().Unix()))
-		return fmt.Errorf("'Ввести' button not found on indicator page")
-	}
-
-	// Check if button is enabled
-	var buttonEnabled bool
+	// Navigate back to main page where the "Ввести" button is located
+	log.Println("Navigating back to main page to find 'Ввести' button...")
 	err = chromedp.Run(ctx,
-		chromedp.Evaluate(`
-			(function() {
-				const buttons = document.querySelectorAll('button, input[type="submit"], a');
-				for (let btn of buttons) {
-					if (btn.textContent.includes('Ввести') || (btn.value && btn.value.includes('Ввести'))) {
-						return !btn.disabled;
-					}
-				}
-				return false;
-			})()
-		`, &buttonEnabled),
+		chromedp.Navigate("https://gasolina-online.com/"),
+		chromedp.Sleep(2*time.Second),
+		chromedp.WaitReady("body"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to navigate back to main page: %w", err)
+	}
+
+	// Find the modal trigger button (the "Ввести" button that opens the modal)
+	// This button has data-toggle="modal" attribute
+	var modalButtonFound bool
+	err = chromedp.Run(ctx,
+		chromedp.Evaluate(`document.querySelector('button[data-toggle="modal"][data-target="#counterModal"]') !== null`, &modalButtonFound),
 	)
 
-	if err == nil {
-		if buttonEnabled {
-			log.Println("'Ввести' button is ENABLED")
-		} else {
-			log.Println("WARNING: 'Ввести' button is DISABLED - may need to be within days 1-5")
-		}
+	if err != nil || !modalButtonFound {
+		log.Println("WARNING: Could not find modal trigger button with data-toggle='modal'")
+		_ = SaveScreenshot(ctx, fmt.Sprintf("no_modal_button_%d.png", time.Now().Unix()))
+		return fmt.Errorf("modal trigger button not found on indicator page")
 	}
+
+	log.Println("Found modal trigger button (data-toggle='modal')")
+
+	// Get button data attributes for logging
+	var buttonSerial, buttonValue string
+	_ = chromedp.Run(ctx,
+		chromedp.Evaluate(`document.querySelector('button[data-toggle="modal"][data-target="#counterModal"]').getAttribute('data-serial')`, &buttonSerial),
+		chromedp.Evaluate(`document.querySelector('button[data-toggle="modal"][data-target="#counterModal"]').getAttribute('data-value')`, &buttonValue),
+	)
+	log.Printf("Modal button data: serial=%s, current_value=%s", buttonSerial, buttonValue)
+
+	// Click the modal trigger button to open the modal
+	log.Println("Clicking modal trigger button to open form...")
+	err = chromedp.Run(ctx,
+		chromedp.Click(`button[data-toggle="modal"][data-target="#counterModal"]`, chromedp.ByQuery),
+		chromedp.Sleep(1*time.Second),
+	)
+	if err != nil {
+		_ = SaveScreenshot(ctx, fmt.Sprintf("error_open_modal_%d.png", time.Now().Unix()))
+		return fmt.Errorf("failed to click modal trigger button: %w", err)
+	}
+
+	// Wait for the modal to be visible
+	log.Println("Waiting for modal to appear...")
+	err = chromedp.Run(ctx,
+		chromedp.WaitVisible(`#counterModal`, chromedp.ByID),
+		chromedp.Sleep(500*time.Millisecond),
+	)
+	if err != nil {
+		_ = SaveScreenshot(ctx, fmt.Sprintf("error_modal_not_visible_%d.png", time.Now().Unix()))
+		return fmt.Errorf("modal did not appear: %w", err)
+	}
+
+	log.Println("Modal is now visible")
+
+	// Find the input field in the modal
+	var inputFound bool
+	err = chromedp.Run(ctx,
+		chromedp.Evaluate(`document.querySelector('#value') !== null`, &inputFound),
+	)
+
+	if err != nil || !inputFound {
+		log.Println("WARNING: Could not find #value input field in modal")
+		_ = SaveScreenshot(ctx, fmt.Sprintf("no_input_in_modal_%d.png", time.Now().Unix()))
+		return fmt.Errorf("input field #value not found in modal")
+	}
+
+	log.Println("Found input field #value in modal")
+
+	// Fill the input field with the new value
+	log.Printf("Filling input field with new value: %d", newValue)
+	err = chromedp.Run(ctx,
+		chromedp.Clear(`#value`, chromedp.ByID),
+		chromedp.SendKeys(`#value`, fmt.Sprintf("%d", newValue), chromedp.ByID),
+		chromedp.Sleep(500*time.Millisecond),
+	)
+	if err != nil {
+		_ = SaveScreenshot(ctx, fmt.Sprintf("error_fill_input_%d.png", time.Now().Unix()))
+		return fmt.Errorf("failed to fill input field: %w", err)
+	}
+
+	// Verify the value was entered
+	var enteredValue string
+	_ = chromedp.Run(ctx,
+		chromedp.Value(`#value`, &enteredValue, chromedp.ByID),
+	)
+	log.Printf("Value entered in input field: %s", enteredValue)
 
 	// DRY-RUN MODE - controlled by GASOLINA_DRY_RUN env var (default: true)
 	// Set GASOLINA_DRY_RUN=false to enable real submissions
@@ -202,50 +201,52 @@ func CheckAndUpdateIfNeeded(ctx context.Context, config *Config) error {
 		log.Println("===========================================")
 		log.Println("DRY-RUN MODE (set GASOLINA_DRY_RUN=false to submit)")
 		log.Println("===========================================")
-		log.Printf("Would perform the following actions:")
-		if inputFound {
-			log.Printf("  1. Clear input field: %s", inputSelector)
-			log.Printf("  2. Enter new value: %d", newValue)
-		}
-		log.Printf("  3. Click button: %s", buttonSelector)
-		log.Printf("  4. Wait for submission to complete")
-		log.Printf("  5. Verify success message")
+		log.Printf("Form data ready for submission:")
+		log.Printf("  - Counter serial: %s", buttonSerial)
+		log.Printf("  - Previous value: %s", buttonValue)
+		log.Printf("  - New value: %d", newValue)
+		log.Printf("  - Input field: #value")
+		log.Printf("  - Value entered: %s", enteredValue)
 		log.Println("===========================================")
-		log.Println("SKIPPING actual submission (dry-run mode)")
+		log.Println("SKIPPING submit button click (dry-run mode)")
 		log.Println("===========================================")
 
-		// Save screenshot of the state
-		_ = SaveScreenshot(ctx, fmt.Sprintf("dry_run_ready_%d.png", time.Now().Unix()))
+		// Save screenshot of the filled form
+		_ = SaveScreenshot(ctx, fmt.Sprintf("dry_run_form_filled_%d.png", time.Now().Unix()))
 		return nil
 	}
 
-	// The code below would execute if DRY_RUN were set to false
-	// LEFT HERE FOR FUTURE REFERENCE - NOT EXECUTED
-	log.Println("Filling form and submitting...")
+	// Find and click the submit button inside the modal
+	log.Println("Finding submit button in modal...")
+	var submitButtonFound bool
+	err = chromedp.Run(ctx,
+		chromedp.Evaluate(`
+			(function() {
+				const modal = document.querySelector('#counterModal');
+				if (!modal) return false;
+				const submitBtn = modal.querySelector('button[type="submit"]');
+				return submitBtn !== null;
+			})()
+		`, &submitButtonFound),
+	)
 
-	if inputFound && inputSelector != "" {
-		err = chromedp.Run(ctx,
-			chromedp.Clear(inputSelector, chromedp.ByQuery),
-			chromedp.SendKeys(inputSelector, fmt.Sprintf("%d", newValue), chromedp.ByQuery),
-			chromedp.Sleep(1*time.Second),
-		)
-		if err != nil {
-			return fmt.Errorf("failed to enter new value: %w", err)
-		}
-		log.Printf("Entered value: %d", newValue)
+	if err != nil || !submitButtonFound {
+		log.Println("WARNING: Could not find submit button in modal")
+		_ = SaveScreenshot(ctx, fmt.Sprintf("no_submit_button_%d.png", time.Now().Unix()))
+		return fmt.Errorf("submit button not found in modal")
 	}
 
-	// Click the button
+	log.Println("Found submit button, clicking...")
 	err = chromedp.Run(ctx,
-		chromedp.Click(buttonSelector, chromedp.ByQuery),
+		chromedp.Click(`#counterModal button[type="submit"]`, chromedp.ByQuery),
 		chromedp.Sleep(3*time.Second),
 	)
 	if err != nil {
 		_ = SaveScreenshot(ctx, fmt.Sprintf("error_submit_%d.png", time.Now().Unix()))
-		return fmt.Errorf("failed to click 'Ввести' button: %w", err)
+		return fmt.Errorf("failed to click submit button: %w", err)
 	}
 
-	log.Println("Clicked 'Ввести' button")
+	log.Println("Clicked submit button")
 
 	// Verify submission success
 	var successMessage string
