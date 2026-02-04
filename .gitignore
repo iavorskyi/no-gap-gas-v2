@@ -20,6 +20,9 @@ go.work
 # Screenshots from debugging
 *.png
 
+# Data directory (SQLite DB, screenshots)
+data/
+
 # IDE specific files
 .vscode/
 .idea/
