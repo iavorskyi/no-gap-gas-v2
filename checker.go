@@ -95,8 +95,13 @@ func CheckAndUpdateIfNeeded(ctx context.Context, config *Config) error {
 	}
 
 	if recordExists {
-		log.Printf("Record for current month (%s %d) already exists - no update needed",
+		log.Println("===========================================")
+		log.Println("RECORD ALREADY EXISTS - STOPPING JOB")
+		log.Println("===========================================")
+		log.Printf("Record for %s %d already exists in the system",
 			getUkrainianMonthName(now.Month()), now.Year())
+		log.Println("No submission needed - job complete")
+		log.Println("===========================================")
 		return nil
 	}
 
@@ -433,8 +438,13 @@ func CheckAndUpdateIfNeededWithLogger(ctx context.Context, config *Config, logge
 	}
 
 	if recordExists {
-		logger.Log(fmt.Sprintf("Record for current month (%s %d) already exists - no update needed",
+		logger.Log("===========================================")
+		logger.Log("RECORD ALREADY EXISTS - STOPPING JOB")
+		logger.Log("===========================================")
+		logger.Log(fmt.Sprintf("Record for %s %d already exists in the system",
 			getUkrainianMonthName(now.Month()), now.Year()))
+		logger.Log("No submission needed - job complete")
+		logger.Log("===========================================")
 		return nil
 	}
 
