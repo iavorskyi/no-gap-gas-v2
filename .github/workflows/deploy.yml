@@ -49,24 +49,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Debug secret
+      - name: Setup SSH key
         run: |
-          echo "Key length: ${#SSH_KEY}"
-          echo "First 10 chars: ${SSH_KEY:0:10}"
-        env:
-          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
 
       - name: Deploy to VPS
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: deploy
-          key: ${{ secrets.VPS_SSH_KEY }}
-          debug: true
-          script: |
-            cd ~/api
-            docker compose pull
-            docker compose up -d --force-recreate
-            docker image prune -f
-            echo "Deployment complete!"
-            docker ps | grep gasolina
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no deploy@${{ secrets.VPS_HOST }} << 'EOF'
+          cd ~/api
+          docker compose pull
+          docker compose up -d --force-recreate
+          docker image prune -f
+          echo "Deployment complete!"
+          docker ps | grep gasolina
