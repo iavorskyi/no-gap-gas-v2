@@ -77,23 +77,24 @@ func CheckAndUpdateIfNeeded(ctx context.Context, config *Config) error {
 
 	// Now navigate to indicator page to check for existing records
 	log.Printf("Navigating to: %s", config.CheckURL)
-	var pageContent string
 
 	err = chromedp.Run(ctx,
 		chromedp.Navigate(config.CheckURL),
 		chromedp.Sleep(2*time.Second),
 		chromedp.WaitReady("body"),
-		chromedp.Evaluate(`document.body.innerText`, &pageContent),
 	)
 
 	if err != nil {
 		return fmt.Errorf("failed to navigate to indicator page: %w", err)
 	}
 
-	log.Printf("Indicator page content length: %d characters", len(pageContent))
-
 	// Check if a record for the current month/year already exists
-	if recordExists := checkForCurrentMonthRecord(pageContent, now); recordExists {
+	recordExists, err := checkForCurrentMonthRecordInTable(ctx, now, &defaultLogger{})
+	if err != nil {
+		log.Printf("Warning: error checking for existing record: %v", err)
+	}
+
+	if recordExists {
 		log.Printf("Record for current month (%s %d) already exists - no update needed",
 			getUkrainianMonthName(now.Month()), now.Year())
 		return nil
@@ -267,32 +268,67 @@ func CheckAndUpdateIfNeeded(ctx context.Context, config *Config) error {
 	return nil
 }
 
-// checkForCurrentMonthRecord checks if a record for the current month/year exists on the page
-func checkForCurrentMonthRecord(pageContent string, now time.Time) bool {
-	// Get current month and year
+// checkForCurrentMonthRecordInTable checks if a record for the current month/year exists in the indicator table
+// It selects the current year in the dropdown and searches for a date matching the current month
+func checkForCurrentMonthRecordInTable(ctx context.Context, now time.Time, logger Logger) (bool, error) {
 	currentMonth := now.Month()
 	currentYear := now.Year()
 
-	// Ukrainian month name (e.g., "Січень 2026")
-	ukrainianMonth := getUkrainianMonthName(currentMonth)
-	pattern1 := fmt.Sprintf("%s %d", ukrainianMonth, currentYear)
+	logger.Log(fmt.Sprintf("Checking for existing record for %02d.%d", currentMonth, currentYear))
 
-	// Numeric formats
-	pattern2 := fmt.Sprintf("%02d.%d", currentMonth, currentYear)       // 01.2026
-	pattern3 := fmt.Sprintf("%d-%02d", currentYear, currentMonth)       // 2026-01
-	pattern4 := fmt.Sprintf("%02d/%d", currentMonth, currentYear)       // 01/2026
-	pattern5 := fmt.Sprintf("%s %04d", ukrainianMonth, currentYear%100) // Січень 26
+	// Calculate the dropdown value for current year
+	// value="0" is 2026, value="1" is 2025, etc.
+	// So value = 2026 - currentYear
+	yearValue := 2026 - currentYear
+	if yearValue < 0 {
+		yearValue = 0
+	}
 
-	// Check all patterns
-	patterns := []string{pattern1, pattern2, pattern3, pattern4, pattern5}
-	for _, pattern := range patterns {
-		if strings.Contains(pageContent, pattern) {
-			log.Printf("Found matching pattern: %s", pattern)
-			return true
+	logger.Log(fmt.Sprintf("Selecting year %d (dropdown value: %d)", currentYear, yearValue))
+
+	// Select the current year in the dropdown
+	err := chromedp.Run(ctx,
+		chromedp.WaitVisible(`#filter\[year\]`, chromedp.ByID),
+		chromedp.SetValue(`#filter\[year\]`, fmt.Sprintf("%d", yearValue), chromedp.ByID),
+		chromedp.Sleep(500*time.Millisecond),
+		// Trigger the onchange event to submit the form
+		chromedp.Evaluate(`document.getElementById('filter[year]').dispatchEvent(new Event('change'))`, nil),
+		chromedp.Sleep(2*time.Second),
+		chromedp.WaitReady("body"),
+	)
+
+	if err != nil {
+		return false, fmt.Errorf("failed to select year in dropdown: %w", err)
+	}
+
+	// Get all dates from the table
+	var dates []string
+	err = chromedp.Run(ctx,
+		chromedp.Evaluate(`
+			Array.from(document.querySelectorAll('table.table tbody tr td:nth-child(2)'))
+				.map(td => td.innerText.trim())
+		`, &dates),
+	)
+
+	if err != nil {
+		return false, fmt.Errorf("failed to read table dates: %w", err)
+	}
+
+	logger.Log(fmt.Sprintf("Found %d records in table", len(dates)))
+
+	// Check if any date matches the current month and year
+	// Date format in table: DD.MM.YYYY (e.g., "31.01.2026")
+	monthYearPattern := fmt.Sprintf(".%02d.%d", currentMonth, currentYear)
+
+	for _, date := range dates {
+		logger.Log(fmt.Sprintf("Checking date: %s", date))
+		if strings.Contains(date, monthYearPattern) {
+			logger.Log(fmt.Sprintf("Found matching record: %s", date))
+			return true, nil
 		}
 	}
 
-	return false
+	return false, nil
 }
 
 // getUkrainianMonthName returns the Ukrainian name for a given month
@@ -379,23 +415,24 @@ func CheckAndUpdateIfNeededWithLogger(ctx context.Context, config *Config, logge
 
 	// Now navigate to indicator page to check for existing records
 	logger.Log(fmt.Sprintf("Navigating to: %s", config.CheckURL))
-	var pageContent string
 
 	err = chromedp.Run(ctx,
 		chromedp.Navigate(config.CheckURL),
 		chromedp.Sleep(2*time.Second),
 		chromedp.WaitReady("body"),
-		chromedp.Evaluate(`document.body.innerText`, &pageContent),
 	)
 
 	if err != nil {
 		return fmt.Errorf("failed to navigate to indicator page: %w", err)
 	}
 
-	logger.Log(fmt.Sprintf("Indicator page content length: %d characters", len(pageContent)))
-
 	// Check if a record for the current month/year already exists
-	if recordExists := checkForCurrentMonthRecord(pageContent, now); recordExists {
+	recordExists, err := checkForCurrentMonthRecordInTable(ctx, now, logger)
+	if err != nil {
+		logger.Log(fmt.Sprintf("Warning: error checking for existing record: %v", err))
+	}
+
+	if recordExists {
 		logger.Log(fmt.Sprintf("Record for current month (%s %d) already exists - no update needed",
 			getUkrainianMonthName(now.Month()), now.Year()))
 		return nil
