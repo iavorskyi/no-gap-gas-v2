@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/chromedp/chromedp"
 )
 
 var screenshotsPath = "./data/screenshots"
@@ -431,4 +435,208 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 		"configured":  cfg.Configured,
 		"recent_jobs": jobs,
 	})
+}
+
+// GasolinaUserInfo contains data scraped from gasolina-online.com
+type GasolinaUserInfo struct {
+	UserName           string `json:"user_name"`
+	UserAddress        string `json:"user_address"`
+	GasDistributionPrice string `json:"gas_distribution_price"`
+	GasDistributionDebt  string `json:"gas_distribution_debt"`
+	GasDistributionDate  string `json:"gas_distribution_date"`
+	CounterNumber      string `json:"counter_number"`
+	CounterType        string `json:"counter_type"`
+	PreviousReading    string `json:"previous_reading"`
+	TechServiceDebt    string `json:"tech_service_debt"`
+	TechServiceDate    string `json:"tech_service_date"`
+	FetchedAt          string `json:"fetched_at"`
+}
+
+// handleGetGasolinaInfo fetches user info from gasolina-online.com
+func handleGetGasolinaInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	userID, ok := GetUserIDFromContext(r.Context())
+	if !ok {
+		jsonError(w, "User not found in context", http.StatusUnauthorized)
+		return
+	}
+
+	// Get user config for Gasolina credentials
+	cfg, err := GetUserConfig(userID)
+	if err != nil {
+		jsonError(w, "Failed to get user config", http.StatusInternalServerError)
+		return
+	}
+
+	if !cfg.Configured {
+		jsonError(w, "Gasolina credentials not configured", http.StatusBadRequest)
+		return
+	}
+
+	// Fetch data from gasolina-online.com
+	info, err := fetchGasolinaUserInfo(cfg.GasolinaEmail, cfg.GasolinaPassword, cfg.AccountNumber)
+	if err != nil {
+		jsonError(w, fmt.Sprintf("Failed to fetch data: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(info)
+}
+
+// fetchGasolinaUserInfo logs into gasolina-online.com and scrapes user info
+func fetchGasolinaUserInfo(email, password, accountNumber string) (*GasolinaUserInfo, error) {
+	// Create browser context
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("headless", true),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+	)
+
+	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
+	defer allocCancel()
+
+	ctx, cancel := chromedp.NewContext(allocCtx)
+	defer cancel()
+
+	// Set timeout
+	ctx, cancel = context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	// Login first
+	err := Login(ctx, email, password, accountNumber)
+	if err != nil {
+		return nil, fmt.Errorf("login failed: %w", err)
+	}
+
+	// Navigate to main page and scrape data
+	var userName, userAddress string
+	var gasPrice, gasDebt, gasDate string
+	var counterNumber, counterType, prevReading string
+	var techDebt, techDate string
+
+	err = chromedp.Run(ctx,
+		chromedp.Navigate("https://gasolina-online.com/"),
+		chromedp.Sleep(2*time.Second),
+		chromedp.WaitReady("body"),
+
+		// User name and address
+		chromedp.Evaluate(`document.querySelector('.user-name')?.innerText?.trim() || ''`, &userName),
+		chromedp.Evaluate(`document.querySelector('.user-address')?.innerText?.trim() || ''`, &userAddress),
+
+		// Gas distribution price
+		chromedp.Evaluate(`
+			(function() {
+				const cards = document.querySelectorAll('.m-card');
+				for (const card of cards) {
+					const text = card.innerText;
+					if (text.includes('Ціна за розподіл газу')) {
+						const match = text.match(/(\d+[.,]\d+)/);
+						return match ? match[1] : '';
+					}
+				}
+				return '';
+			})()
+		`, &gasPrice),
+
+		// Gas distribution debt
+		chromedp.Evaluate(`
+			(function() {
+				const cards = document.querySelectorAll('.m-card');
+				for (const card of cards) {
+					const text = card.innerText;
+					if (text.includes('До сплати за розподіл газу')) {
+						const debtEl = card.querySelector('.debt-sum span');
+						return debtEl ? debtEl.innerText.trim() : '';
+					}
+				}
+				return '';
+			})()
+		`, &gasDebt),
+
+		// Gas distribution date
+		chromedp.Evaluate(`
+			(function() {
+				const cards = document.querySelectorAll('.m-card');
+				for (const card of cards) {
+					const text = card.innerText;
+					if (text.includes('До сплати за розподіл газу')) {
+						const match = text.match(/станом на\s+(\d{2}\.\d{2}\.\d{4})/);
+						return match ? match[1] : '';
+					}
+				}
+				return '';
+			})()
+		`, &gasDate),
+
+		// Counter number and type
+		chromedp.Evaluate(`document.querySelector('#counter')?.value || ''`, &counterNumber),
+		chromedp.Evaluate(`
+			(function() {
+				const label = document.querySelector('label[for="counter"]');
+				if (label) {
+					const text = label.innerText;
+					const match = text.match(/тип\s+(.+?)\)/i);
+					return match ? match[1].trim() : '';
+				}
+				return '';
+			})()
+		`, &counterType),
+
+		// Previous reading
+		chromedp.Evaluate(`document.querySelector('#last_value')?.value || ''`, &prevReading),
+
+		// Technical service debt
+		chromedp.Evaluate(`
+			(function() {
+				const cards = document.querySelectorAll('.m-card');
+				for (const card of cards) {
+					const text = card.innerText;
+					if (text.includes('Технічне обслуговування')) {
+						const debtEl = card.querySelector('.debt-sum span');
+						return debtEl ? debtEl.innerText.trim() : '';
+					}
+				}
+				return '';
+			})()
+		`, &techDebt),
+
+		// Technical service date
+		chromedp.Evaluate(`
+			(function() {
+				const cards = document.querySelectorAll('.m-card');
+				for (const card of cards) {
+					const text = card.innerText;
+					if (text.includes('Технічне обслуговування')) {
+						const match = text.match(/станом на\s+(\d{2}\.\d{2}\.\d{4})/);
+						return match ? match[1] : '';
+					}
+				}
+				return '';
+			})()
+		`, &techDate),
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to scrape data: %w", err)
+	}
+
+	return &GasolinaUserInfo{
+		UserName:             userName,
+		UserAddress:          userAddress,
+		GasDistributionPrice: gasPrice,
+		GasDistributionDebt:  gasDebt,
+		GasDistributionDate:  gasDate,
+		CounterNumber:        counterNumber,
+		CounterType:          counterType,
+		PreviousReading:      prevReading,
+		TechServiceDebt:      techDebt,
+		TechServiceDate:      techDate,
+		FetchedAt:            time.Now().Format("02.01.2006 15:04:05"),
+	}, nil
 }

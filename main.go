@@ -99,6 +99,7 @@ func runServer() {
 	mux.Handle("/api/jobs/", AuthMiddleware(http.HandlerFunc(handleJobsWithID)))
 	mux.Handle("/api/screenshots/", AuthMiddleware(http.HandlerFunc(handleScreenshotsRoute)))
 	mux.Handle("/api/status", AuthMiddleware(http.HandlerFunc(handleStatus)))
+	mux.Handle("/api/gasolina-info", AuthMiddleware(http.HandlerFunc(handleGetGasolinaInfo)))
 
 	// Apply CORS middleware
 	handler := CORSMiddleware(appCfg.CORSAllowedOrigins)(mux)
