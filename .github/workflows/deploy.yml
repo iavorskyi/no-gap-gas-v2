@@ -49,18 +49,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Setup SSH key
+      - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          echo "${{ secrets.VPS_SSH_KEY }}" | tr -d '\r' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
 
       - name: Deploy to VPS
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no deploy@${{ secrets.VPS_HOST }} << 'EOF'
-          cd ~/api
-          docker compose pull
-          docker compose up -d --force-recreate
-          docker image prune -f
-          echo "Deployment complete!"
-          docker ps | grep gasolina
+          ssh -i ~/.ssh/deploy_key -T deploy@${{ secrets.VPS_HOST }} 'cd ~/api && docker compose pull && docker compose up -d --force-recreate && docker image prune -f && echo "Deployment complete!" && docker ps | grep gasolina'
