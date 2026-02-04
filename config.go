@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 )
 
-// Config holds the application configuration
+// Config holds the application configuration (legacy, for CLI mode)
 type Config struct {
 	Email             string
 	Password          string
@@ -19,7 +21,71 @@ type Config struct {
 	MonthlyIncrements map[int]int // month number -> increment value
 }
 
-// LoadConfig loads configuration from environment variables
+// AppConfig holds the HTTP server configuration
+type AppConfig struct {
+	// HTTP Server
+	HTTPPort string
+
+	// JWT
+	JWTSecret        string
+	JWTAccessExpiry  time.Duration
+	JWTRefreshExpiry time.Duration
+
+	// Database
+	DBPath string
+
+	// Screenshots
+	ScreenshotsPath string
+
+	// CORS
+	CORSAllowedOrigins []string
+
+	// Legacy config (for CLI mode)
+	LegacyConfig *Config
+}
+
+// LoadAppConfig loads the application configuration from environment variables
+func LoadAppConfig() (*AppConfig, error) {
+	// Load .env file if it exists (ignore error if it doesn't)
+	_ = godotenv.Load()
+
+	cfg := &AppConfig{
+		HTTPPort:        getEnvOrDefault("HTTP_PORT", "8080"),
+		JWTSecret:       os.Getenv("JWT_SECRET"),
+		DBPath:          getEnvOrDefault("DB_PATH", "./data/gasolina.db"),
+		ScreenshotsPath: getEnvOrDefault("SCREENSHOTS_PATH", "./data/screenshots"),
+	}
+
+	// Parse JWT expiry durations
+	accessExpiry := getEnvOrDefault("JWT_ACCESS_EXPIRY", "15m")
+	if d, err := time.ParseDuration(accessExpiry); err == nil {
+		cfg.JWTAccessExpiry = d
+	} else {
+		cfg.JWTAccessExpiry = 15 * time.Minute
+	}
+
+	refreshExpiry := getEnvOrDefault("JWT_REFRESH_EXPIRY", "168h") // 7 days
+	if d, err := time.ParseDuration(refreshExpiry); err == nil {
+		cfg.JWTRefreshExpiry = d
+	} else {
+		cfg.JWTRefreshExpiry = 7 * 24 * time.Hour
+	}
+
+	// Parse CORS origins
+	corsOrigins := os.Getenv("CORS_ALLOWED_ORIGINS")
+	if corsOrigins != "" {
+		cfg.CORSAllowedOrigins = strings.Split(corsOrigins, ",")
+		for i := range cfg.CORSAllowedOrigins {
+			cfg.CORSAllowedOrigins[i] = strings.TrimSpace(cfg.CORSAllowedOrigins[i])
+		}
+	} else {
+		cfg.CORSAllowedOrigins = []string{"*"}
+	}
+
+	return cfg, nil
+}
+
+// LoadConfig loads configuration from environment variables (legacy, for CLI mode)
 func LoadConfig() (*Config, error) {
 	// Load .env file if it exists (ignore error if it doesn't)
 	_ = godotenv.Load()
@@ -86,4 +152,11 @@ func (c *Config) GetIncrementForPreviousMonth(currentMonth int) (int, int, error
 	}
 	increment, err := c.GetIncrementForMonth(prevMonth)
 	return increment, prevMonth, err
+}
+
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }

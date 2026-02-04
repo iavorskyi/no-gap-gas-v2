@@ -10,9 +10,29 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-// Login performs authentication on gasolina-online.com
-func Login(ctx context.Context, email, password, accountNumber string) error {
-	log.Printf("Attempting to login as %s, psw: %s...", email, password)
+// Logger interface for job logging
+type Logger interface {
+	Log(message string)
+}
+
+// defaultLogger implements Logger using standard log
+type defaultLogger struct{}
+
+func (d *defaultLogger) Log(message string) {
+	log.Println(message)
+}
+
+// GasolinaLogin performs authentication on gasolina-online.com
+// This is the refactored version that accepts logger and screenshot callback
+func GasolinaLogin(ctx context.Context, email, password, accountNumber string, logger Logger, saveScreenshot func(string)) error {
+	if logger == nil {
+		logger = &defaultLogger{}
+	}
+	if saveScreenshot == nil {
+		saveScreenshot = func(name string) {}
+	}
+
+	logger.Log(fmt.Sprintf("Attempting to login as %s...", email))
 
 	var loginURL = "https://gasolina-online.com/"
 
@@ -26,8 +46,8 @@ func Login(ctx context.Context, email, password, accountNumber string) error {
 	}
 
 	// Save screenshot to see the page state
-	_ = SaveScreenshot(ctx, "debug_before_login.png")
-	log.Println("Screenshot saved: debug_before_login.png")
+	saveScreenshot("debug_before_login")
+	logger.Log("Screenshot saved: debug_before_login")
 
 	// Check what elements are on the page
 	var pageHTML string
@@ -35,9 +55,9 @@ func Login(ctx context.Context, email, password, accountNumber string) error {
 		chromedp.Evaluate(`document.documentElement.outerHTML`, &pageHTML),
 	)
 	if err != nil {
-		log.Printf("Warning: couldn't get page HTML: %v", err)
+		logger.Log(fmt.Sprintf("Warning: couldn't get page HTML: %v", err))
 	} else {
-		log.Printf("Page HTML length: %d characters", len(pageHTML))
+		logger.Log(fmt.Sprintf("Page HTML length: %d characters", len(pageHTML)))
 	}
 
 	// Try to find input fields with various selectors
@@ -66,14 +86,14 @@ func Login(ctx context.Context, email, password, accountNumber string) error {
 			chromedp.SendKeys(selector, email, chromedp.ByQuery),
 		)
 		if err == nil {
-			log.Printf("Email field found with selector: %s", selector)
+			logger.Log(fmt.Sprintf("Email field found with selector: %s", selector))
 			emailFound = true
 			break
 		}
 	}
 
 	if !emailFound {
-		return fmt.Errorf("email field not found - check debug_before_login.png")
+		return fmt.Errorf("email field not found - check debug_before_login screenshot")
 	}
 
 	// Try each password selector
@@ -84,14 +104,14 @@ func Login(ctx context.Context, email, password, accountNumber string) error {
 			chromedp.SendKeys(selector, password, chromedp.ByQuery),
 		)
 		if err == nil {
-			log.Printf("Password field found with selector: %s", selector)
+			logger.Log(fmt.Sprintf("Password field found with selector: %s", selector))
 			passwordFound = true
 			break
 		}
 	}
 
 	if !passwordFound {
-		return fmt.Errorf("password field not found - check debug_before_login.png")
+		return fmt.Errorf("password field not found - check debug_before_login screenshot")
 	}
 
 	// Try to find and click the login button
@@ -111,14 +131,14 @@ func Login(ctx context.Context, email, password, accountNumber string) error {
 			chromedp.Click(selector, chromedp.ByQuery),
 		)
 		if err == nil {
-			log.Printf("Login button found with selector: %s", selector)
+			logger.Log(fmt.Sprintf("Login button found with selector: %s", selector))
 			buttonFound = true
 			break
 		}
 	}
 
 	if !buttonFound {
-		log.Println("Warning: login button not found, trying to submit form with Enter key")
+		logger.Log("Warning: login button not found, trying to submit form with Enter key")
 		// Try pressing Enter in the password field
 		err = chromedp.Run(ctx,
 			chromedp.SendKeys(`input[type="password"]`, "\n", chromedp.ByQuery),
@@ -132,12 +152,12 @@ func Login(ctx context.Context, email, password, accountNumber string) error {
 	chromedp.Run(ctx, chromedp.Sleep(3*time.Second))
 
 	// Save screenshot after login attempt
-	_ = SaveScreenshot(ctx, "debug_after_login.png")
-	log.Println("Screenshot saved: debug_after_login.png")
+	saveScreenshot("debug_after_login")
+	logger.Log("Screenshot saved: debug_after_login")
 
 	// Select account from dropdown
 	if accountNumber != "" {
-		log.Printf("Selecting account containing: %s", accountNumber)
+		logger.Log(fmt.Sprintf("Selecting account containing: %s", accountNumber))
 
 		// First, click the hamburger menu to open navigation using JavaScript
 		err = chromedp.Run(ctx,
@@ -145,11 +165,11 @@ func Login(ctx context.Context, email, password, accountNumber string) error {
 			chromedp.Sleep(1*time.Second),
 		)
 		if err != nil {
-			log.Printf("Hamburger menu click failed: %v", err)
+			logger.Log(fmt.Sprintf("Hamburger menu click failed: %v", err))
 		}
 
-		_ = SaveScreenshot(ctx, "debug_menu_open.png")
-		log.Println("Screenshot saved: debug_menu_open.png")
+		saveScreenshot("debug_menu_open")
+		logger.Log("Screenshot saved: debug_menu_open")
 
 		// Click the account dropdown toggle button using JavaScript
 		err = chromedp.Run(ctx,
@@ -160,8 +180,8 @@ func Login(ctx context.Context, email, password, accountNumber string) error {
 			return fmt.Errorf("failed to click account dropdown: %w", err)
 		}
 
-		_ = SaveScreenshot(ctx, "debug_dropdown_open.png")
-		log.Println("Screenshot saved: debug_dropdown_open.png")
+		saveScreenshot("debug_dropdown_open")
+		logger.Log("Screenshot saved: debug_dropdown_open")
 
 		// Find and click the dropdown item containing the account number using JavaScript
 		jsClick := fmt.Sprintf(`
@@ -181,15 +201,24 @@ func Login(ctx context.Context, email, password, accountNumber string) error {
 			return fmt.Errorf("failed to select account %s: %w", accountNumber, err)
 		}
 
-		_ = SaveScreenshot(ctx, "debug_account_selected.png")
-		log.Printf("Account %s selected successfully", accountNumber)
+		saveScreenshot("debug_account_selected")
+		logger.Log(fmt.Sprintf("Account %s selected successfully", accountNumber))
 	}
 
-	log.Println("Login sequence completed")
+	logger.Log("Login sequence completed")
 	return nil
 }
 
-// SaveScreenshot saves a screenshot for debugging purposes
+// Login is the legacy function for backwards compatibility with CLI mode
+func Login(ctx context.Context, email, password, accountNumber string) error {
+	// Use old-style screenshot saving for CLI mode
+	saveScreenshot := func(name string) {
+		SaveScreenshot(ctx, name+".png")
+	}
+	return GasolinaLogin(ctx, email, password, accountNumber, nil, saveScreenshot)
+}
+
+// SaveScreenshot saves a screenshot for debugging purposes (legacy, for CLI mode)
 func SaveScreenshot(ctx context.Context, filename string) error {
 	var buf []byte
 	if err := chromedp.Run(ctx, chromedp.FullScreenshot(&buf, 90)); err != nil {
@@ -201,5 +230,19 @@ func SaveScreenshot(ctx context.Context, filename string) error {
 	}
 
 	log.Printf("Screenshot saved: %s", filename)
+	return nil
+}
+
+// SaveScreenshotToPath saves a screenshot to a specific path (for job mode)
+func SaveScreenshotToPath(ctx context.Context, path string) error {
+	var buf []byte
+	if err := chromedp.Run(ctx, chromedp.FullScreenshot(&buf, 90)); err != nil {
+		return fmt.Errorf("failed to capture screenshot: %w", err)
+	}
+
+	if err := os.WriteFile(path, buf, 0644); err != nil {
+		return fmt.Errorf("failed to save screenshot: %w", err)
+	}
+
 	return nil
 }
