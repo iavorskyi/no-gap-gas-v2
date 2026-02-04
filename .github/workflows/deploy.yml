@@ -55,6 +55,7 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: deploy
           key: ${{ secrets.VPS_SSH_KEY }}
+          debug: true
           script: |
             cd ~/api
             docker compose pull
