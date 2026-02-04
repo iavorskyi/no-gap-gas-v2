@@ -274,62 +274,89 @@ func CheckAndUpdateIfNeeded(ctx context.Context, config *Config) error {
 }
 
 // checkForCurrentMonthRecordInTable checks if a record for the current month/year exists in the indicator table
-// It selects the current year in the dropdown and searches for a date matching the current month
+// It also checks for records from the last 2 days of the previous month
+// It selects the current year in the dropdown and searches for matching dates
 func checkForCurrentMonthRecordInTable(ctx context.Context, now time.Time, logger Logger) (bool, error) {
 	currentMonth := now.Month()
 	currentYear := now.Year()
 
+	// Calculate last 2 days of previous month
+	firstDayOfCurrentMonth := time.Date(currentYear, currentMonth, 1, 0, 0, 0, 0, now.Location())
+	lastDayOfPrevMonth := firstDayOfCurrentMonth.AddDate(0, 0, -1)
+	secondLastDayOfPrevMonth := firstDayOfCurrentMonth.AddDate(0, 0, -2)
+
 	logger.Log(fmt.Sprintf("Checking for existing record for %02d.%d", currentMonth, currentYear))
+	logger.Log(fmt.Sprintf("Also checking last 2 days of previous month: %s, %s",
+		secondLastDayOfPrevMonth.Format("02.01.2006"),
+		lastDayOfPrevMonth.Format("02.01.2006")))
 
-	// Calculate the dropdown value for current year
-	// value="0" is 2026, value="1" is 2025, etc.
-	// So value = 2026 - currentYear
-	yearValue := 2026 - currentYear
-	if yearValue < 0 {
-		yearValue = 0
+	// We may need to check two different years if we're in January
+	yearsToCheck := []int{currentYear}
+	if currentMonth == time.January {
+		yearsToCheck = append(yearsToCheck, currentYear-1)
 	}
 
-	logger.Log(fmt.Sprintf("Selecting year %d (dropdown value: %d)", currentYear, yearValue))
+	for _, year := range yearsToCheck {
+		// Calculate the dropdown value for the year
+		// value="0" is 2026, value="1" is 2025, etc.
+		yearValue := 2026 - year
+		if yearValue < 0 {
+			yearValue = 0
+		}
 
-	// Select the current year in the dropdown
-	err := chromedp.Run(ctx,
-		chromedp.WaitVisible(`#filter\[year\]`, chromedp.ByID),
-		chromedp.SetValue(`#filter\[year\]`, fmt.Sprintf("%d", yearValue), chromedp.ByID),
-		chromedp.Sleep(500*time.Millisecond),
-		// Trigger the onchange event to submit the form
-		chromedp.Evaluate(`document.getElementById('filter[year]').dispatchEvent(new Event('change'))`, nil),
-		chromedp.Sleep(2*time.Second),
-		chromedp.WaitReady("body"),
-	)
+		logger.Log(fmt.Sprintf("Selecting year %d (dropdown value: %d)", year, yearValue))
 
-	if err != nil {
-		return false, fmt.Errorf("failed to select year in dropdown: %w", err)
-	}
+		// Select the year in the dropdown
+		err := chromedp.Run(ctx,
+			chromedp.WaitVisible(`#filter\[year\]`, chromedp.ByID),
+			chromedp.SetValue(`#filter\[year\]`, fmt.Sprintf("%d", yearValue), chromedp.ByID),
+			chromedp.Sleep(500*time.Millisecond),
+			// Trigger the onchange event to submit the form
+			chromedp.Evaluate(`document.getElementById('filter[year]').dispatchEvent(new Event('change'))`, nil),
+			chromedp.Sleep(2*time.Second),
+			chromedp.WaitReady("body"),
+		)
 
-	// Get all dates from the table
-	var dates []string
-	err = chromedp.Run(ctx,
-		chromedp.Evaluate(`
-			Array.from(document.querySelectorAll('table.table tbody tr td:nth-child(2)'))
-				.map(td => td.innerText.trim())
-		`, &dates),
-	)
+		if err != nil {
+			return false, fmt.Errorf("failed to select year in dropdown: %w", err)
+		}
 
-	if err != nil {
-		return false, fmt.Errorf("failed to read table dates: %w", err)
-	}
+		// Get all dates from the table
+		var dates []string
+		err = chromedp.Run(ctx,
+			chromedp.Evaluate(`
+				Array.from(document.querySelectorAll('table.table tbody tr td:nth-child(2)'))
+					.map(td => td.innerText.trim())
+			`, &dates),
+		)
 
-	logger.Log(fmt.Sprintf("Found %d records in table", len(dates)))
+		if err != nil {
+			return false, fmt.Errorf("failed to read table dates: %w", err)
+		}
 
-	// Check if any date matches the current month and year
-	// Date format in table: DD.MM.YYYY (e.g., "31.01.2026")
-	monthYearPattern := fmt.Sprintf(".%02d.%d", currentMonth, currentYear)
+		logger.Log(fmt.Sprintf("Found %d records in table for year %d", len(dates), year))
 
-	for _, date := range dates {
-		logger.Log(fmt.Sprintf("Checking date: %s", date))
-		if strings.Contains(date, monthYearPattern) {
-			logger.Log(fmt.Sprintf("Found matching record: %s", date))
-			return true, nil
+		// Build list of patterns to match
+		// Current month pattern: .MM.YYYY (e.g., ".02.2026")
+		currentMonthPattern := fmt.Sprintf(".%02d.%d", currentMonth, currentYear)
+		// Last 2 days of previous month patterns: DD.MM.YYYY
+		lastDayPattern := lastDayOfPrevMonth.Format("02.01.2006")
+		secondLastDayPattern := secondLastDayOfPrevMonth.Format("02.01.2006")
+
+		for _, date := range dates {
+			logger.Log(fmt.Sprintf("Checking date: %s", date))
+
+			// Check current month
+			if strings.Contains(date, currentMonthPattern) {
+				logger.Log(fmt.Sprintf("Found matching record for current month: %s", date))
+				return true, nil
+			}
+
+			// Check last 2 days of previous month
+			if date == lastDayPattern || date == secondLastDayPattern {
+				logger.Log(fmt.Sprintf("Found matching record from end of previous month: %s", date))
+				return true, nil
+			}
 		}
 	}
 
