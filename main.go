@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -56,16 +55,18 @@ func runServer() {
 		log.Fatal("JWT_SECRET must be at least 32 characters")
 	}
 
-	// Ensure data directories exist
-	if err := os.MkdirAll(filepath.Dir(appCfg.DBPath), 0755); err != nil {
-		log.Fatalf("Failed to create data directory: %v", err)
+	// Validate database URL
+	if appCfg.DatabaseURL == "" {
+		log.Fatal("DATABASE_URL environment variable is required for server mode")
 	}
+
+	// Ensure screenshots directory exists
 	if err := os.MkdirAll(appCfg.ScreenshotsPath, 0755); err != nil {
 		log.Fatalf("Failed to create screenshots directory: %v", err)
 	}
 
 	// Initialize database
-	if err := InitDB(appCfg.DBPath); err != nil {
+	if err := InitDB(appCfg.DatabaseURL); err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 	defer CloseDB()
@@ -368,8 +369,8 @@ func init() {
 		fmt.Fprintf(os.Stderr, "  Server mode (-server): Runs HTTP API, requires JWT_SECRET env var\n")
 		fmt.Fprintf(os.Stderr, "\nEnvironment Variables (Server mode):\n")
 		fmt.Fprintf(os.Stderr, "  JWT_SECRET            Required. Secret for JWT signing (min 32 chars)\n")
+		fmt.Fprintf(os.Stderr, "  DATABASE_URL          Required. PostgreSQL connection URL\n")
 		fmt.Fprintf(os.Stderr, "  HTTP_PORT             HTTP port (default: 8080)\n")
-		fmt.Fprintf(os.Stderr, "  DB_PATH               SQLite database path (default: ./data/gasolina.db)\n")
 		fmt.Fprintf(os.Stderr, "  SCREENSHOTS_PATH      Screenshots directory (default: ./data/screenshots)\n")
 		fmt.Fprintf(os.Stderr, "  CORS_ALLOWED_ORIGINS  Comma-separated CORS origins (default: *)\n")
 	}

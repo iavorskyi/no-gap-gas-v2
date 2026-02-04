@@ -32,7 +32,7 @@ type AppConfig struct {
 	JWTRefreshExpiry time.Duration
 
 	// Database
-	DBPath string
+	DatabaseURL string
 
 	// Screenshots
 	ScreenshotsPath string
@@ -52,7 +52,7 @@ func LoadAppConfig() (*AppConfig, error) {
 	cfg := &AppConfig{
 		HTTPPort:        getEnvOrDefault("HTTP_PORT", "8080"),
 		JWTSecret:       os.Getenv("JWT_SECRET"),
-		DBPath:          getEnvOrDefault("DB_PATH", "./data/gasolina.db"),
+		DatabaseURL:     os.Getenv("DATABASE_URL"),
 		ScreenshotsPath: getEnvOrDefault("SCREENSHOTS_PATH", "./data/screenshots"),
 	}
 

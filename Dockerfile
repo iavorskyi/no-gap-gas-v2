@@ -1,9 +1,6 @@
 # Build stage
 FROM golang:1.24-alpine AS builder
 
-# Install build dependencies for CGO (required by go-sqlite3)
-RUN apk add --no-cache gcc musl-dev
-
 WORKDIR /app
 
 # Copy go mod files
@@ -13,8 +10,8 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the application with CGO enabled for SQLite
-RUN CGO_ENABLED=1 GOOS=linux go build -o no-gap-gas-v2
+# Build the application (CGO not required for lib/pq)
+RUN CGO_ENABLED=0 GOOS=linux go build -o no-gap-gas-v2
 
 # Runtime stage - Use Debian with Chrome
 FROM debian:bookworm-slim
@@ -57,7 +54,7 @@ COPY --from=builder /app/no-gap-gas-v2 .
 # Make sure it's executable
 RUN chmod +x no-gap-gas-v2
 
-# Create data directory for SQLite and screenshots
+# Create data directory for screenshots
 RUN mkdir -p /app/data
 
 # Expose HTTP port

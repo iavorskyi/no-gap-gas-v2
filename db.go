@@ -13,16 +13,16 @@ import (
 	"io"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/lib/pq"
 	"golang.org/x/crypto/bcrypt"
 )
 
 var db *sql.DB
 
-// InitDB initializes the SQLite database and runs migrations
-func InitDB(dbPath string) error {
+// InitDB initializes the PostgreSQL database and runs migrations
+func InitDB(databaseURL string) error {
 	var err error
-	db, err = sql.Open("sqlite3", dbPath+"?_foreign_keys=on")
+	db, err = sql.Open("postgres", databaseURL)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
@@ -50,62 +50,57 @@ func runMigrations() error {
 	migrations := []string{
 		// Users table
 		`CREATE TABLE IF NOT EXISTS users (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			id SERIAL PRIMARY KEY,
 			email TEXT UNIQUE NOT NULL,
 			password_hash TEXT NOT NULL,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			created_at TIMESTAMPTZ DEFAULT NOW(),
+			updated_at TIMESTAMPTZ DEFAULT NOW()
 		)`,
 
 		// User configurations (Gasolina credentials)
 		`CREATE TABLE IF NOT EXISTS configs (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER UNIQUE NOT NULL,
+			id SERIAL PRIMARY KEY,
+			user_id INTEGER UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			gasolina_email TEXT,
 			gasolina_password TEXT,
 			account_number TEXT,
 			check_url TEXT DEFAULT 'https://gasolina-online.com/indicator',
 			cron_schedule TEXT DEFAULT '0 0 1 * *',
-			dry_run BOOLEAN DEFAULT 1,
+			dry_run BOOLEAN DEFAULT TRUE,
 			monthly_increments TEXT,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+			created_at TIMESTAMPTZ DEFAULT NOW(),
+			updated_at TIMESTAMPTZ DEFAULT NOW()
 		)`,
 
 		// Refresh tokens
 		`CREATE TABLE IF NOT EXISTS refresh_tokens (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER NOT NULL,
+			id SERIAL PRIMARY KEY,
+			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			token_hash TEXT UNIQUE NOT NULL,
-			expires_at DATETIME NOT NULL,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+			expires_at TIMESTAMPTZ NOT NULL,
+			created_at TIMESTAMPTZ DEFAULT NOW()
 		)`,
 
 		// Jobs table
 		`CREATE TABLE IF NOT EXISTS jobs (
 			id TEXT PRIMARY KEY,
-			user_id INTEGER NOT NULL,
+			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			type TEXT NOT NULL,
 			status TEXT NOT NULL,
 			error TEXT,
 			logs TEXT,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			started_at DATETIME,
-			completed_at DATETIME,
-			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+			created_at TIMESTAMPTZ DEFAULT NOW(),
+			started_at TIMESTAMPTZ,
+			completed_at TIMESTAMPTZ
 		)`,
 
 		// Screenshots table
 		`CREATE TABLE IF NOT EXISTS screenshots (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			job_id TEXT NOT NULL,
-			user_id INTEGER NOT NULL,
+			id SERIAL PRIMARY KEY,
+			job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			filename TEXT NOT NULL,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE,
-			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+			created_at TIMESTAMPTZ DEFAULT NOW()
 		)`,
 
 		// Index for faster queries
@@ -179,15 +174,15 @@ func CreateUser(email, password string) (*User, error) {
 		return nil, fmt.Errorf("failed to hash password: %w", err)
 	}
 
-	result, err := db.Exec(
-		"INSERT INTO users (email, password_hash) VALUES (?, ?)",
+	var id int64
+	err = db.QueryRow(
+		"INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id",
 		email, string(hash),
-	)
+	).Scan(&id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
 
-	id, _ := result.LastInsertId()
 	return GetUserByID(id)
 }
 
@@ -195,7 +190,7 @@ func CreateUser(email, password string) (*User, error) {
 func GetUserByID(id int64) (*User, error) {
 	user := &User{}
 	err := db.QueryRow(
-		"SELECT id, email, password_hash, created_at, updated_at FROM users WHERE id = ?",
+		"SELECT id, email, password_hash, created_at, updated_at FROM users WHERE id = $1",
 		id,
 	).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.CreatedAt, &user.UpdatedAt)
 
@@ -213,7 +208,7 @@ func GetUserByID(id int64) (*User, error) {
 func GetUserByEmail(email string) (*User, error) {
 	user := &User{}
 	err := db.QueryRow(
-		"SELECT id, email, password_hash, created_at, updated_at FROM users WHERE email = ?",
+		"SELECT id, email, password_hash, created_at, updated_at FROM users WHERE email = $1",
 		email,
 	).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.CreatedAt, &user.UpdatedAt)
 
@@ -241,7 +236,7 @@ func UpdateUserPassword(userID int64, newPassword string) error {
 	}
 
 	_, err = db.Exec(
-		"UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+		"UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2",
 		string(hash), userID,
 	)
 	return err
@@ -256,7 +251,7 @@ func GetUserConfig(userID int64) (*UserConfig, error) {
 	err := db.QueryRow(`
 		SELECT id, gasolina_email, gasolina_password, account_number, check_url,
 		       cron_schedule, dry_run, monthly_increments, created_at, updated_at
-		FROM configs WHERE user_id = ?`, userID,
+		FROM configs WHERE user_id = $1`, userID,
 	).Scan(&cfg.ID, &gasolinaEmail, &gasolinaPassword, &accountNumber,
 		&checkURL, &cronSchedule, &cfg.DryRun, &incrementsJSON,
 		&cfg.CreatedAt, &cfg.UpdatedAt)
@@ -333,16 +328,16 @@ func SaveUserConfig(userID int64, email, password, accountNumber, checkURL, cron
 	_, err := db.Exec(`
 		INSERT INTO configs (user_id, gasolina_email, gasolina_password, account_number,
 		                     check_url, cron_schedule, dry_run, monthly_increments)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT(user_id) DO UPDATE SET
-			gasolina_email = COALESCE(NULLIF(excluded.gasolina_email, ''), gasolina_email),
-			gasolina_password = COALESCE(NULLIF(excluded.gasolina_password, ''), gasolina_password),
-			account_number = COALESCE(NULLIF(excluded.account_number, ''), account_number),
-			check_url = COALESCE(NULLIF(excluded.check_url, ''), check_url),
-			cron_schedule = COALESCE(NULLIF(excluded.cron_schedule, ''), cron_schedule),
+			gasolina_email = COALESCE(NULLIF(excluded.gasolina_email, ''), configs.gasolina_email),
+			gasolina_password = COALESCE(NULLIF(excluded.gasolina_password, ''), configs.gasolina_password),
+			account_number = COALESCE(NULLIF(excluded.account_number, ''), configs.account_number),
+			check_url = COALESCE(NULLIF(excluded.check_url, ''), configs.check_url),
+			cron_schedule = COALESCE(NULLIF(excluded.cron_schedule, ''), configs.cron_schedule),
 			dry_run = excluded.dry_run,
-			monthly_increments = COALESCE(NULLIF(excluded.monthly_increments, ''), monthly_increments),
-			updated_at = CURRENT_TIMESTAMP`,
+			monthly_increments = COALESCE(NULLIF(excluded.monthly_increments, ''), configs.monthly_increments),
+			updated_at = NOW()`,
 		userID, email, encryptedPassword, accountNumber, checkURL, cronSchedule, dryRun, string(incrementsJSON),
 	)
 
@@ -352,7 +347,7 @@ func SaveUserConfig(userID int64, email, password, accountNumber, checkURL, cron
 // CreateJob creates a new job record
 func CreateJob(id string, userID int64, jobType string) (*Job, error) {
 	_, err := db.Exec(
-		"INSERT INTO jobs (id, user_id, type, status) VALUES (?, ?, ?, ?)",
+		"INSERT INTO jobs (id, user_id, type, status) VALUES ($1, $2, $3, $4)",
 		id, userID, jobType, "pending",
 	)
 	if err != nil {
@@ -370,7 +365,7 @@ func GetJob(id string) (*Job, error) {
 
 	err := db.QueryRow(`
 		SELECT id, user_id, type, status, error, logs, created_at, started_at, completed_at
-		FROM jobs WHERE id = ?`, id,
+		FROM jobs WHERE id = $1`, id,
 	).Scan(&job.ID, &job.UserID, &job.Type, &job.Status, &errorStr, &logsJSON,
 		&job.CreatedAt, &startedAt, &completedAt)
 
@@ -401,12 +396,15 @@ func GetJob(id string) (*Job, error) {
 func GetUserJobs(userID int64, limit int, status string) ([]*Job, int, error) {
 	// Count total
 	var total int
-	countQuery := "SELECT COUNT(*) FROM jobs WHERE user_id = ?"
-	args := []interface{}{userID}
+	var countQuery string
+	var args []interface{}
 
 	if status != "" {
-		countQuery += " AND status = ?"
-		args = append(args, status)
+		countQuery = "SELECT COUNT(*) FROM jobs WHERE user_id = $1 AND status = $2"
+		args = []interface{}{userID, status}
+	} else {
+		countQuery = "SELECT COUNT(*) FROM jobs WHERE user_id = $1"
+		args = []interface{}{userID}
 	}
 
 	if err := db.QueryRow(countQuery, args...).Scan(&total); err != nil {
@@ -414,12 +412,14 @@ func GetUserJobs(userID int64, limit int, status string) ([]*Job, int, error) {
 	}
 
 	// Query jobs
-	query := "SELECT id, user_id, type, status, error, logs, created_at, started_at, completed_at FROM jobs WHERE user_id = ?"
+	var query string
 	if status != "" {
-		query += " AND status = ?"
+		query = "SELECT id, user_id, type, status, error, logs, created_at, started_at, completed_at FROM jobs WHERE user_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT $3"
+		args = []interface{}{userID, status, limit}
+	} else {
+		query = "SELECT id, user_id, type, status, error, logs, created_at, started_at, completed_at FROM jobs WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2"
+		args = []interface{}{userID, limit}
 	}
-	query += " ORDER BY created_at DESC LIMIT ?"
-	args = append(args, limit)
 
 	rows, err := db.Query(query, args...)
 	if err != nil {
@@ -459,16 +459,16 @@ func UpdateJobStatus(id, status string, errorMsg *string) error {
 	var err error
 	if status == "running" {
 		_, err = db.Exec(
-			"UPDATE jobs SET status = ?, started_at = CURRENT_TIMESTAMP WHERE id = ?",
+			"UPDATE jobs SET status = $1, started_at = NOW() WHERE id = $2",
 			status, id,
 		)
 	} else if status == "completed" || status == "failed" {
 		_, err = db.Exec(
-			"UPDATE jobs SET status = ?, error = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?",
+			"UPDATE jobs SET status = $1, error = $2, completed_at = NOW() WHERE id = $3",
 			status, errorMsg, id,
 		)
 	} else {
-		_, err = db.Exec("UPDATE jobs SET status = ? WHERE id = ?", status, id)
+		_, err = db.Exec("UPDATE jobs SET status = $1 WHERE id = $2", status, id)
 	}
 	return err
 }
@@ -476,14 +476,14 @@ func UpdateJobStatus(id, status string, errorMsg *string) error {
 // AppendJobLogs appends logs to a job
 func AppendJobLogs(id string, logs []string) error {
 	logsJSON, _ := json.Marshal(logs)
-	_, err := db.Exec("UPDATE jobs SET logs = ? WHERE id = ?", string(logsJSON), id)
+	_, err := db.Exec("UPDATE jobs SET logs = $1 WHERE id = $2", string(logsJSON), id)
 	return err
 }
 
 // CreateScreenshot creates a screenshot record
 func CreateScreenshot(jobID string, userID int64, filename string) error {
 	_, err := db.Exec(
-		"INSERT INTO screenshots (job_id, user_id, filename) VALUES (?, ?, ?)",
+		"INSERT INTO screenshots (job_id, user_id, filename) VALUES ($1, $2, $3)",
 		jobID, userID, filename,
 	)
 	return err
@@ -492,7 +492,7 @@ func CreateScreenshot(jobID string, userID int64, filename string) error {
 // GetJobScreenshots retrieves screenshots for a job
 func GetJobScreenshots(jobID string) ([]*Screenshot, error) {
 	rows, err := db.Query(
-		"SELECT id, job_id, user_id, filename, created_at FROM screenshots WHERE job_id = ? ORDER BY created_at",
+		"SELECT id, job_id, user_id, filename, created_at FROM screenshots WHERE job_id = $1 ORDER BY created_at",
 		jobID,
 	)
 	if err != nil {
@@ -515,7 +515,7 @@ func GetJobScreenshots(jobID string) ([]*Screenshot, error) {
 // SaveRefreshToken saves a hashed refresh token
 func SaveRefreshToken(userID int64, tokenHash string, expiresAt time.Time) error {
 	_, err := db.Exec(
-		"INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)",
+		"INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)",
 		userID, tokenHash, expiresAt,
 	)
 	return err
@@ -527,7 +527,7 @@ func GetRefreshToken(tokenHash string) (int64, time.Time, error) {
 	var expiresAt time.Time
 
 	err := db.QueryRow(
-		"SELECT user_id, expires_at FROM refresh_tokens WHERE token_hash = ?",
+		"SELECT user_id, expires_at FROM refresh_tokens WHERE token_hash = $1",
 		tokenHash,
 	).Scan(&userID, &expiresAt)
 
@@ -543,13 +543,13 @@ func GetRefreshToken(tokenHash string) (int64, time.Time, error) {
 
 // DeleteRefreshToken deletes a refresh token
 func DeleteRefreshToken(tokenHash string) error {
-	_, err := db.Exec("DELETE FROM refresh_tokens WHERE token_hash = ?", tokenHash)
+	_, err := db.Exec("DELETE FROM refresh_tokens WHERE token_hash = $1", tokenHash)
 	return err
 }
 
 // DeleteUserRefreshTokens deletes all refresh tokens for a user
 func DeleteUserRefreshTokens(userID int64) error {
-	_, err := db.Exec("DELETE FROM refresh_tokens WHERE user_id = ?", userID)
+	_, err := db.Exec("DELETE FROM refresh_tokens WHERE user_id = $1", userID)
 	return err
 }
 
